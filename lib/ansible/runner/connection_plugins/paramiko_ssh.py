@@ -39,23 +39,26 @@ from ansible.callbacks import vvv
 from ansible import errors
 from ansible import utils
 from ansible import constants as C
-            
-AUTHENTICITY_MSG="""
+
+AUTHENTICITY_MSG = """
 paramiko: The authenticity of host '%s' can't be established. 
 The %s key fingerprint is %s. 
 Are you sure you want to continue connecting (yes/no)?
 """
 
 # prevent paramiko warning noise -- see http://stackoverflow.com/questions/3920502/
-HAVE_PARAMIKO=False
+HAVE_PARAMIKO = False
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     try:
         import paramiko
-        HAVE_PARAMIKO=True
+
+        HAVE_PARAMIKO = True
         logging.getLogger("paramiko").setLevel(logging.WARNING)
+        from paramiko.ssh_exception import SSHException
     except ImportError:
         pass
+
 
 class MyAddPolicy(object):
     """
@@ -66,7 +69,7 @@ class MyAddPolicy(object):
     local L{HostKeys} object, and saving it.  This is used by L{SSHClient}.
     """
 
-    def __init__(self, runner): 
+    def __init__(self, runner):
         self.runner = runner
 
     def missing_host_key(self, client, hostname, key):
@@ -80,20 +83,19 @@ class MyAddPolicy(object):
             sys.stdin = self.runner._new_stdin
             fingerprint = hexlify(key.get_fingerprint())
             ktype = key.get_name()
-            
+
             # clear out any premature input on sys.stdin
             tcflush(sys.stdin, TCIFLUSH)
 
             inp = raw_input(AUTHENTICITY_MSG % (hostname, ktype, fingerprint))
             sys.stdin = old_stdin
-            if inp not in ['yes','y','']:
+            if inp not in ['yes', 'y', '']:
                 fcntl.flock(self.runner.output_lockfile, fcntl.LOCK_UN)
                 fcntl.flock(self.runner.process_lockfile, fcntl.LOCK_UN)
                 raise errors.AnsibleError("host connection rejected by user")
 
             fcntl.lockf(self.runner.output_lockfile, fcntl.LOCK_UN)
             fcntl.lockf(self.runner.process_lockfile, fcntl.LOCK_UN)
-
 
         key._added_by_ansible_this_time = True
 
@@ -102,12 +104,13 @@ class MyAddPolicy(object):
 
         # host keys are actually saved in close() function below
         # in order to control ordering.
-        
+
 
 # keep connection objects on a per host basis to avoid repeated attempts to reconnect
 
 SSH_CONNECTION_CACHE = {}
 SFTP_CONNECTION_CACHE = {}
+
 
 class Connection(object):
     ''' SSH based connections with Paramiko '''
@@ -144,7 +147,7 @@ class Connection(object):
         vvv("ESTABLISH CONNECTION FOR USER: %s on PORT %s TO %s" % (self.user, self.port, self.host), host=self.host)
 
         ssh = paramiko.SSHClient()
-     
+
         self.keyfile = os.path.expanduser("~/.ssh/known_hosts")
 
         if C.HOST_KEY_CHECKING:
@@ -161,13 +164,21 @@ class Connection(object):
                 key_filename = os.path.expanduser(self.runner.private_key_file)
             else:
                 key_filename = None
+            pkey = None
+            try:
+                pkey = paramiko.RSAKey.from_private_key_file(key_filename, self.password)
+            except SSHException:
+                pkey = paramiko.DSSKey.from_private_key_file(key_filename, self.password)
+            except Exception:
+                pkey = None
             ssh.connect(self.host, username=self.user, allow_agent=allow_agent, look_for_keys=True,
-                key_filename=key_filename, password=self.password,
-                timeout=self.runner.timeout, port=self.port)
+                        key_filename=key_filename, password=self.password,
+                        timeout=self.runner.timeout, port=self.port, pkey=pkey)
         except Exception, e:
             msg = str(e)
             if "PID check failed" in msg:
-                raise errors.AnsibleError("paramiko version issue, please upgrade paramiko on the machine running ansible")
+                raise errors.AnsibleError(
+                    "paramiko version issue, please upgrade paramiko on the machine running ansible")
             elif "Private key file is encrypted" in msg:
                 msg = 'ssh %s@%s:%s : %s\nTo connect as a different user, use -u <username>.' % (
                     self.user, self.host, self.port, msg)
@@ -177,7 +188,8 @@ class Connection(object):
 
         return ssh
 
-    def exec_command(self, cmd, tmp_path, sudo_user=None, sudoable=False, executable='/bin/sh', in_data=None, su=None, su_user=None):
+    def exec_command(self, cmd, tmp_path, sudo_user=None, sudoable=False, executable='/bin/sh', in_data=None, su=None,
+                     su_user=None):
         ''' run a command on the remote host '''
 
         if in_data:
@@ -220,8 +232,8 @@ class Connection(object):
                 if self.runner.sudo_pass or self.runner.su_pass:
                     while True:
                         if success_key in sudo_output or \
-                            (self.runner.sudo_pass and sudo_output.endswith(prompt)) or \
-                            (self.runner.su_pass and prompt_re.match(sudo_output)):
+                                (self.runner.sudo_pass and sudo_output.endswith(prompt)) or \
+                                (self.runner.su_pass and prompt_re.match(sudo_output)):
                             break
                         chunk = chan.recv(bufsize)
                         if not chunk:
@@ -230,7 +242,7 @@ class Connection(object):
                                     'user %s does not exist' % sudo_user)
                             else:
                                 raise errors.AnsibleError('ssh connection ' +
-                                    'closed waiting for password prompt')
+                                                          'closed waiting for password prompt')
                         sudo_output += chunk
                     if success_key not in sudo_output:
                         if sudoable:
@@ -279,7 +291,7 @@ class Connection(object):
             raise errors.AnsibleError("failed to transfer file from %s" % in_path)
 
     def _any_keys_added(self):
-        added_any = False        
+        added_any = False
         for hostname, keys in self.ssh._host_keys.iteritems():
             for keytype, key in keys.iteritems():
                 added_this_time = getattr(key, '_added_by_ansible_this_time', False)
@@ -325,7 +337,7 @@ class Connection(object):
         if C.PARAMIKO_RECORD_HOST_KEYS and self._any_keys_added():
 
             # add any new SSH host keys -- warning -- this could be slow
-            lockfile = self.keyfile.replace("known_hosts",".known_hosts.lock") 
+            lockfile = self.keyfile.replace("known_hosts", ".known_hosts.lock")
             dirname = os.path.dirname(self.keyfile)
             if not os.path.exists(dirname):
                 os.makedirs(dirname)
